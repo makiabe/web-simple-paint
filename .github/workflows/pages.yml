@@ -1,0 +1,84 @@
+name: Publish browser paint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'app.js'
+      - 'styles.css'
+      - 'assets/**'
+      - '.bootstrap/READY'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      ready: ${{ steps.site.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+      - name: Import verified release, when present
+        shell: bash
+        run: |
+          if [ -f .bootstrap/READY ]; then
+            python3 .bootstrap/import.py
+            node --check app.js
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add --all
+            if ! git diff --cached --quiet; then
+              git commit -m 'Install verified browser paint source and original assets'
+              git push origin HEAD:main
+            fi
+          fi
+      - name: Check and package static website
+        id: site
+        shell: bash
+        run: |
+          if [ ! -f index.html ]; then
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'Application release has not been imported yet.'
+            exit 0
+          fi
+          node --check app.js
+          mkdir -p _site
+          cp index.html app.js styles.css _site/
+          cp -R assets _site/assets
+          touch _site/.nojekyll
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+      - name: Upload site
+        if: steps.site.outputs.ready == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    if: needs.build.outputs.ready == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Publish GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
